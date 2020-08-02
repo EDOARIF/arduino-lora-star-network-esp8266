@@ -9,7 +9,7 @@
 #define dio0 15 //D8
 
 int counter = 0;
-
+long timer = 0;
 void setup() {
   //initialize Serial Monitor
   Serial.begin(115200);
@@ -31,21 +31,36 @@ void setup() {
   // ranges from 0-0xFF
   LoRa.setSyncWord(0xF3);
   Serial.println("LoRa Initializing OK!");
+  timer = millis();
 }
 
 void loop() {
-  Serial.print("Sending packet: ");
-  Serial.println(counter);
-  delay(200);
-  
-  
   //Send LoRa packet to receiver
   LoRa.beginPacket();
-  LoRa.print("hello ");
+  LoRa.print("AdsfgdsfgsdfgsdfgsdfgsdfgsdfgsdfgsdA");
   LoRa.print(counter);
   LoRa.endPacket();
-
   counter++;
 
+  delay(1000);
+
+  Serial.print(F("waiting: "));
+  timer = millis();
+  Serial.println(timer);
+  while(true){
+    int packetSize = LoRa.parsePacket();
+    if (packetSize){
+      while (LoRa.available()) {
+        String LoRaData = LoRa.readString();
+        Serial.println(LoRaData);
+      }
+      break;
+    }
+    if(millis()-timer >= 1000){
+      Serial.println(F("Timout"));
+      break;
+    }
+  }
+  
   delay(5000);
 }
