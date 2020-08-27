@@ -11,18 +11,15 @@ const int dio0 = 2;
 #define receiving_led A1
 #define waiting_led A0
 
-#define node_req "r"
+String msg;
+byte msg_len;
 
-//(RSSI)Received Signal Strength Indication(dBm)
-const int rssi_minimum = -120;  //weakest signal strength
-const int rssi_offset = -30;    //fail status of rssi
+const byte sync_word = 0xF3;
+const byte station_id = 3;
+const byte master_id = 0;
 
-bool IsTimout = false;
-long timer = 0, timout = 30000;
-
-uint8_t node_id = 2;
-bool node_status = true;
-float node_data = 0.45;
+long timer;
+volatile bool request_status = false;
 
 void setup() {
   //initialize Serial Monitor
@@ -45,52 +42,67 @@ void setup() {
   // Change sync word (0xF3) to match the receiver
   // The sync word assures you don't get LoRa messages from other LoRa transceivers
   // ranges from 0-0xFF
-  LoRa.setSyncWord(0xF3);
+  LoRa.setSyncWord(sync_word);
+  LoRa.onReceive(onReceive);
+  LoRa.receive();
   Serial.println("LoRa Initializing OK!");
+  timer = millis();
 }
 
 void loop() {
-  // try to parse packet
-  int packetSize = LoRa.parsePacket();
-  if (packetSize) {
-    //Reset timout event
-    timer = millis();
-    IsTimout = false;
-
-    StaticJsonDocument<200> doc;
-    DeserializationError ERROR = deserializeJson(doc, LoRa);
-
-    if (!ERROR){
-      String get_station = doc["s"];
-      int get_id = doc["i"];
-      String get_data = doc[F("d")];
-      if((get_station="m1") && (get_id=node_id) && (get_data=node_req)){
-         Serial.print("id = "); Serial.println(get_id);
-         Serial.print("data = "); Serial.println(get_data);
-         node_status = (rssi_minimum-LoRa.packetRssi()<rssi_offset);
-         node_response(node_id, node_status, node_data);
-      }
-    }else{
-      Serial.println("Fail");
-    }
+  if(request_status){
+    String ssm = "I am Node #3.";
+    digitalWrite(receiving_led, 1);
+    digitalWrite(waiting_led, 0);
+    sendMessage(master_id, station_id, ssm);
+    LoRa.receive();   // go back into receive mode
+    request_status = false;
+    delay(1000);
   }
-
-  if(millis()-timer >= timout){
-    IsTimout = true;
-  }
-
-  digitalWrite(receiving_led, !IsTimout);
-  digitalWrite(waiting_led, IsTimout);
+  digitalWrite(receiving_led, 0);
+  digitalWrite(waiting_led, 1);
 }
 
-void node_response(uint8_t _id, bool _status, float _data){
-  StaticJsonDocument<200> node2main;
-  node2main["s"] = "n1";
-  node2main["i"] = _id;
-  node2main["st"] = _status;
-  node2main["d"] = _data;
- 
-  LoRa.beginPacket();
-  serializeJson(node2main, LoRa);
-  LoRa.endPacket();
+void sendMessage(byte _node_addr, byte _station_addr, String _msg) {
+  LoRa.beginPacket();                   // start packet
+  LoRa.write(_node_addr);               // add destination address
+  LoRa.write(_station_addr);            // add sender address
+  LoRa.write(_msg.length());            // add payload length
+  LoRa.print(_msg);                     // add payload
+  LoRa.endPacket();                     // finish packet and send it
+}
+
+void onReceive(int packetSize) {
+  if (packetSize == 0) return;          // if there's no packet, return
+
+  // read packet header bytes:
+  int recipient = LoRa.read();          // recipient address
+  byte sender = LoRa.read();            // sender address
+  
+  // same station address -> read msg or skip msg
+  if(recipient==station_id && sender==master_id){
+    request_status = true;
+                
+    byte incomingLength = LoRa.read();    // incoming msg length
+    String incoming = "";                 // payload of packet
+    while (LoRa.available()) {            // can't use readString() in callback, so
+      incoming += (char)LoRa.read();      // add bytes one by one
+    }
+
+    if (incomingLength != incoming.length()) {   // check length for error
+      Serial.println("error: message length does not match length");
+      //return;                             // skip rest of function
+    }
+
+    // if message is for this device, or broadcast, print details:
+    Serial.println("Received from: 0x" + String(sender, HEX));
+    Serial.println("Sent to: 0x" + String(recipient, HEX));
+    Serial.println("Message length: " + String(incomingLength));
+    Serial.println("Message: " + incoming);
+    Serial.println("RSSI: " + String(LoRa.packetRssi()));
+    Serial.println("Snr: " + String(LoRa.packetSnr()));
+    Serial.println();
+  }else{
+    Serial.println("Message is not for me!");
+  }
 }
